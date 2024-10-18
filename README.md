@@ -24,7 +24,7 @@ A Node.js script to migrate data from Salesforce to Notion, with progress tracki
 
 ## Setup
 
-### 1. Clone the Repository
+1. Clone the Repository
 
 ```bash
 git clone https://github.com/Dmytrosa/integration-of-Notion-with-Salesforce

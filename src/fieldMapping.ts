@@ -97,3 +97,24 @@ export function mapSalesforceFieldToNotionProperty(
 
   return notionProperty;
 }
+
+export function mapSalesforceFieldTypeToNotionPropertyType(field: Field): any {
+  switch (field.type) {
+    case 'email':
+      return { email: {} };
+    case 'phone':
+      return { phone_number: {} };
+    case 'date':
+    case 'datetime':
+      return { date: {} };
+    case 'boolean':
+      return { checkbox: {} };
+    case 'int':
+    case 'double':
+    case 'currency':
+    case 'percent':
+      return { number: {} };
+    default:
+      return { rich_text: {} };
+  }
+}

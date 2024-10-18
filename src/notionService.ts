@@ -1,19 +1,83 @@
-import { Client } from "@notionhq/client";
-import dotenv from "dotenv";
-import { Contact } from "./models";
-import { mapSalesforceFieldToNotionProperty } from "./fieldMapping";
-import { Field } from "jsforce";
-import logger from "./logger";
+import { Client } from '@notionhq/client';
+import dotenv from 'dotenv';
+import { Field } from 'jsforce';
+import { mapSalesforceFieldTypeToNotionPropertyType, mapSalesforceFieldToNotionProperty } from './fieldMapping';
+import fs from 'fs';
+import path from 'path';
+import logger from './logger';
 
 dotenv.config();
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
+// Load database mappings from databases.json
+const databasesFilePath = path.join(__dirname, '../databases.json');
+let databases: { [key: string]: string } = {};
+
+if (fs.existsSync(databasesFilePath)) {
+  const data = fs.readFileSync(databasesFilePath, 'utf-8');
+  databases = JSON.parse(data);
+}
+
+// Function to get database ID for a Salesforce object
+export function getDatabaseId(objectName: string): string | null {
+  return databases[objectName] || null;
+}
+
+// Function to save database ID for a Salesforce object
+export function saveDatabaseId(objectName: string, databaseId: string) {
+  databases[objectName] = databaseId;
+  fs.writeFileSync(databasesFilePath, JSON.stringify(databases, null, 2));
+}
+
+// Function to create a new Notion database
+export async function createNotionDatabase(
+  objectName: string,
+  fields: Field[],
+  parentPageId: string
+): Promise<string> {
+  // Define properties based on Salesforce fields
+  const properties: { [key: string]: any } = {};
+
+  fields.forEach((field) => {
+    const notionPropertyType = mapSalesforceFieldTypeToNotionPropertyType(field);
+    properties[field.label] = notionPropertyType;
+  });
+
+  // Ensure the 'Name' property exists
+  if (!properties['Name']) {
+    properties['Name'] = { title: {} };
+  }
+
+  // Add 'Salesforce ID' property
+  properties['Salesforce ID'] = { rich_text: {} };
+
+  // Create the database
+  const response = await notion.databases.create({
+    parent: { page_id: parentPageId },
+    title: [
+      {
+        type: 'text',
+        text: {
+          content: objectName,
+        },
+      },
+    ],
+    properties: properties,
+  });
+
+  logger.info(`Created Notion database for ${objectName}: ${response.id}`);
+
+  return response.id;
+}
+
+// Function to retrieve the database schema
 export async function getDatabaseSchema(databaseId: string) {
   const response = await notion.databases.retrieve({ database_id: databaseId });
   return response.properties;
 }
 
+// Function to identify missing properties
 export function identifyMissingProperties(
   existingProperties: { [key: string]: any },
   requiredProperties: string[]
@@ -24,6 +88,7 @@ export function identifyMissingProperties(
   return missingProperties;
 }
 
+// Function to add properties to the database schema
 export async function addPropertiesToDatabase(
   databaseId: string,
   propertiesToAdd: { [key: string]: any }
@@ -34,16 +99,38 @@ export async function addPropertiesToDatabase(
   });
 }
 
-export async function insertContactIntoNotion(
-  contact: Contact,
-  fields: Field[]
-) {
-  const databaseId = process.env.NOTION_CONTACTS_DATABASE_ID || "";
+// Function to find a Notion page by Salesforce ID
+export async function findNotionPageBySalesforceId(
+  databaseId: string,
+  salesforceId: string
+): Promise<string | null> {
+  const response = await notion.databases.query({
+    database_id: databaseId,
+    filter: {
+      property: 'Salesforce ID',
+      rich_text: {
+        equals: salesforceId,
+      },
+    },
+  });
 
-  // Step 1: Fetch current database schema
+  if (response.results.length > 0) {
+    return response.results[0].id;
+  } else {
+    return null;
+  }
+}
+
+// Function to insert or update a record in Notion
+export async function insertOrUpdateRecordInNotion(
+  record: any,
+  fields: Field[],
+  databaseId: string
+) {
+  // Fetch current database schema
   const existingProperties = await getDatabaseSchema(databaseId);
 
-  // Step 2: Prepare the properties we want to insert
+  // Prepare the properties to insert or update
   const properties: any = {};
 
   // Collect required property names
@@ -52,7 +139,7 @@ export async function insertContactIntoNotion(
   fields.forEach((field) => {
     const fieldName = field.name;
     const fieldLabel = field.label;
-    const value = contact[fieldName];
+    const value = record[fieldName];
     if (value !== undefined && value !== null) {
       requiredPropertyNames.push(fieldLabel);
       const notionProperty = mapSalesforceFieldToNotionProperty(field, value);
@@ -62,41 +149,27 @@ export async function insertContactIntoNotion(
     }
   });
 
-  // Step 3: Identify missing properties
+  // Ensure 'Salesforce ID' property is included
+  if (!properties['Salesforce ID']) {
+    properties['Salesforce ID'] = {
+      rich_text: [
+        {
+          text: {
+            content: record.Id,
+          },
+        },
+      ],
+    };
+  }
+
+  // Identify missing properties
   const missingPropertiesNames = identifyMissingProperties(
     existingProperties,
     requiredPropertyNames
   );
 
-  // Step 4: Define the properties to add
+  // Define the properties to add
   const propertiesToAdd: { [key: string]: any } = {};
-
-  // missingPropertiesNames.forEach((propName) => {
-  //   // For simplicity, we'll default to 'rich_text' type for missing properties.
-  //   // You can enhance this to set appropriate types based on field metadata.
-  //   propertiesToAdd[propName] = { rich_text: {} };
-  // });
-  function mapSalesforceFieldTypeToNotionPropertyType(field: Field): any {
-    switch (field.type) {
-      case "email":
-        return { email: {} };
-      case "phone":
-        return { phone_number: {} };
-      case "date":
-      case "datetime":
-        return { date: {} };
-      case "boolean":
-        return { checkbox: {} };
-      case "int":
-      case "double":
-      case "currency":
-      case "percent":
-        return { number: {} };
-      default:
-        return { rich_text: {} };
-    }
-  }
-  
 
   missingPropertiesNames.forEach((propName) => {
     const field = fields.find((f) => f.label === propName);
@@ -105,45 +178,49 @@ export async function insertContactIntoNotion(
     propertiesToAdd[propName] = notionPropertyType;
   });
 
-  // Step 5: Update the database schema if there are missing properties
-  //   if (Object.keys(propertiesToAdd).length > 0) {
-  //     await addPropertiesToDatabase(databaseId, propertiesToAdd);
-  //     // Fetch the updated properties
-  //     Object.assign(existingProperties, await getDatabaseSchema(databaseId));
-  //   }
-
-
+  // Update the database schema if there are missing properties
   if (Object.keys(propertiesToAdd).length > 0) {
     logger.info(
-      `Adding ${
-        Object.keys(propertiesToAdd).length
-      } new properties to the database schema.`
+      `Adding ${Object.keys(propertiesToAdd).length} new properties to the database schema.`
     );
     await addPropertiesToDatabase(databaseId, propertiesToAdd);
-    logger.info("Database schema updated successfully.");
+    logger.info('Database schema updated successfully.');
   }
 
-  // Step 6: Ensure the 'Name' property is set, as Notion requires a title property
-  if (!properties["Name"]) {
-    properties["Name"] = {
+  // Ensure the 'Name' property is set, as Notion requires a title property
+  if (!properties['Name']) {
+    properties['Name'] = {
       title: [
         {
           text: {
-            content: contact.Name || "Untitled",
+            content: record.Name || 'Untitled',
           },
         },
       ],
     };
-  } else if (!properties["Name"].title) {
+  } else if (!properties['Name'].title) {
     // Adjust 'Name' property to be the title
-    properties["Name"] = {
-      title: properties["Name"].rich_text,
+    properties['Name'] = {
+      title: properties['Name'].rich_text,
     };
   }
 
-  // Step 7: Create the page in Notion
-  await notion.pages.create({
-    parent: { database_id: databaseId },
-    properties: properties,
-  });
+  // Check if the page already exists in Notion
+  const pageId = await findNotionPageBySalesforceId(databaseId, record.Id);
+
+  if (pageId) {
+    // Update existing page
+    await notion.pages.update({
+      page_id: pageId,
+      properties: properties,
+    });
+    logger.info(`Updated Notion page for Salesforce ID ${record.Id}`);
+  } else {
+    // Create new page
+    await notion.pages.create({
+      parent: { database_id: databaseId },
+      properties: properties,
+    });
+    logger.info(`Created Notion page for Salesforce ID ${record.Id}`);
+  }
 }

@@ -1,6 +1,5 @@
 import jsforce, { Field } from 'jsforce';
 import dotenv from 'dotenv';
-import { Contact } from './models';
 dotenv.config();
 
 export const conn = new jsforce.Connection({
@@ -18,11 +17,24 @@ export async function loginToSalesforce() {
   );
 }
 
-export async function getSalesforceContacts(fields: Field[]): Promise<Contact[]> {
-    const fieldNames = fields.map((field) => field.name);
-    const query = `SELECT ${fieldNames.join(', ')} FROM Contact`;
-  
-    const records = await conn.query<Contact>(query);
-    return records.records;
+export async function getSalesforceRecords(
+  objectName: string,
+  fields: Field[],
+  lastModifiedDate?: Date | null,
+  justUpdate?: Boolean
+): Promise<any[]> {
+  const fieldNames = fields.map((field) => field.name);
+  let query = `SELECT ${fieldNames.join(', ')} FROM ${objectName}`;
+
+console.log(lastModifiedDate)
+
+  if (justUpdate && lastModifiedDate) {
+    const formattedDate = lastModifiedDate.toISOString();
+    query += ` WHERE LastModifiedDate > ${formattedDate}`;
   }
-  
+
+  query += ` ORDER BY LastModifiedDate ASC`;
+
+  const records = await conn.query<any>(query);
+  return records.records;
+}
