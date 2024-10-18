@@ -49,11 +49,13 @@ MONGODB_URI=
 4. Run the Script
 To generate interfaces and execute the migration, follow these steps:
 
-First, set your working entities using the package.json scripts. Add or verify the following commands:
+First, you can add your working entities using the package.json scripts. Add or verify the following commands:
 "scripts": {
     "generate-interfaces": "npm run generate-interfaces-task",
     "generate-interfaces-task": "ts-node src/generateInterfaces.ts Task"
 }
+
+After you can add corresponding element in "objectsToProcess" array at index file.
 
 Now, to run the migration process:
 npm run master

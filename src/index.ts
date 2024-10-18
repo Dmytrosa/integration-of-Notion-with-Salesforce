@@ -1,34 +1,40 @@
 import {
-  conn,
-  loginToSalesforce,
-  getSalesforceRecords,
-} from './salesforceService';
-import {
   insertOrUpdateRecordInNotion,
   getDatabaseId,
   createNotionDatabase,
   saveDatabaseId,
-} from './notionService';
+  syncNotionToSalesforce,
+} from "./services/notionService";
 import {
   getLastProcessedDate,
   setLastProcessedDate,
   connectMongoDB,
-} from './checkpointService';
-import logger from './logger';
-import { Field } from 'jsforce';
+  getLastSyncedTime,
+  setLastSyncedTime,
+} from "./services/checkpointService";
+import logger from "./logger";
+import { Field } from "jsforce";
+import { ACCOUNT, CONTACT, TASK } from "./constants/general";
+import {
+  conn,
+  getSalesforceRecords,
+  loginToSalesforce,
+} from "./services/salesforceService";
 
 async function processObject(objectName: string, parentPageId: string) {
   logger.info(`Processing Salesforce object: ${objectName}`);
 
-  // Retrieve the metadata for the object
+  // Retrieve object metadata
   const meta = await conn.sobject(objectName).describe();
   const fields: Field[] = meta.fields;
 
-  logger.info(`Retrieved ${fields.length} fields from Salesforce object ${objectName}`);
+  logger.info(
+    `Retrieved ${fields.length} fields from Salesforce object ${objectName}`
+  );
 
   // Get or create the Notion database
   let databaseId = getDatabaseId(objectName);
-  let justUpdate = Boolean(databaseId) 
+  let justUpdate = Boolean(databaseId);
 
   if (!databaseId) {
     logger.info(`No Notion database found for ${objectName}, creating one.`);
@@ -36,15 +42,25 @@ async function processObject(objectName: string, parentPageId: string) {
     saveDatabaseId(objectName, databaseId);
   }
 
-  // Get the last processed date from MongoDB to resume processing
+  // Get the last processed date from MongoDB
   const lastProcessedDate = await getLastProcessedDate(objectName);
-  logger.info(`Last processed ${objectName} modification date: ${lastProcessedDate || 'None'}`);
+  logger.info(
+    `Last processed ${objectName} modification date: ${
+      lastProcessedDate || "None"
+    }`
+  );
 
   // Fetch records from Salesforce
-  const records = await getSalesforceRecords(objectName, fields, lastProcessedDate, justUpdate);
-  logger.info(`Fetched ${records.length} records from Salesforce object ${objectName}`);
+  const records = await getSalesforceRecords(
+    objectName,
+    fields,
+    justUpdate,
+    lastProcessedDate
+  );
+  logger.info(
+    `Fetched ${records.length} records from Salesforce object ${objectName}`
+  );
 
-  // Initialize maxModifiedDate
   let maxModifiedDate: Date | null = lastProcessedDate;
 
   // Process each record
@@ -59,45 +75,65 @@ async function processObject(objectName: string, parentPageId: string) {
         maxModifiedDate = recordModifiedDate;
       }
     } catch (error) {
-      logger.error(`Error processing ${objectName} record ${record.Id}: ${error}`);
-      // Optionally, continue processing or handle the error as needed
+      logger.error(
+        `Error processing ${objectName} record ${record.Id}: ${error}`
+      );
     }
   }
 
-  // After processing all records, update the last processed date in MongoDB
+  // Update the last processed date in MongoDB
   if (maxModifiedDate) {
     await setLastProcessedDate(objectName, maxModifiedDate);
-    logger.info(`Updated last processed date for ${objectName} to ${maxModifiedDate.toISOString()}`);
+    logger.info(
+      `Updated last processed date for ${objectName} to ${maxModifiedDate.toISOString()}`
+    );
   }
+
+  // Sync Notion changes back to Salesforce
+  const lastNotionSyncTime =
+    (await getLastSyncedTime(`NotionToSalesforce_${objectName}`)) ||
+    "1970-01-01T00:00:00Z";
+  await syncNotionToSalesforce(
+    objectName,
+    fields,
+    databaseId,
+    lastNotionSyncTime
+  );
+  await setLastSyncedTime(
+    `NotionToSalesforce_${objectName}`,
+    new Date().toISOString()
+  );
+  logger.info(`Synced changes from Notion to Salesforce for ${objectName}`);
 }
 
 async function main() {
   try {
     // Connect to MongoDB
     await connectMongoDB();
-    logger.info('Connected to MongoDB');
+    logger.info("Connected to MongoDB");
 
     // Log into Salesforce
     await loginToSalesforce();
-    logger.info('Logged into Salesforce');
+    logger.info("Logged into Salesforce");
 
-    // Define the parent page ID where databases will be created
-    const parentPageId = process.env.NOTION_PARENT_PAGE_ID || '';
+    // Define the parent page ID for Notion databases
+    const parentPageId = process.env.NOTION_PARENT_PAGE_ID || "";
 
     // List of Salesforce objects to process
-    const objectsToProcess = ['Contact', 'Task']; // Add more objects as needed
+    // Do Not rename
+    const objectsToProcess = [CONTACT, ACCOUNT, TASK];
 
     // Process each object
     for (const objectName of objectsToProcess) {
       await processObject(objectName, parentPageId);
     }
 
-    logger.info('Migration completed successfully');
+    logger.info("Bi-directional synchronization completed successfully");
   } catch (error) {
-    logger.error(`Error during migration: ${error}`);
+    logger.error(`Error during synchronization: ${error}`);
     process.exit(1);
   } finally {
-    // Close MongoDB connection if necessary
+    // Optional: Close MongoDB connection if necessary
   }
 }
 

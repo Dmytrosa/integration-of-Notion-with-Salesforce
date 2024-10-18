@@ -1,70 +1,71 @@
-import jsforce from 'jsforce';
-import fs from 'fs';
-import path from 'path';
-import dotenv from 'dotenv';
+import fs from "fs";
+import path from "path";
+import dotenv from "dotenv";
+import logger from "./logger";
+import { conn } from "./services/salesforceService";
 dotenv.config();
 
 async function generateInterface(objectName: string) {
-  const conn = new jsforce.Connection({
-    oauth2: {
-      loginUrl: 'https://login.salesforce.com',
-      clientId: process.env.SALESFORCE_CLIENT_ID,
-      clientSecret: process.env.SALESFORCE_CLIENT_SECRET,
-    },
-  });
-
+  // Log in to Salesforce
   await conn.login(
-    process.env.SALESFORCE_USERNAME || '',
-    (process.env.SALESFORCE_PASSWORD || '') + (process.env.SALESFORCE_SECURITY_TOKEN || '')
+    process.env.SALESFORCE_USERNAME || "",
+    (process.env.SALESFORCE_PASSWORD || "") +
+      (process.env.SALESFORCE_SECURITY_TOKEN || "")
   );
 
+  // Describe the Salesforce object
   const meta = await conn.sobject(objectName).describe();
   const fields = meta.fields;
 
-  let interfaceString = `export interface ${objectName} {\n   [key: string]: any; \n`;
+  let interfaceString = `export interface ${objectName} {\n  [key: string]: any; \n  LastSynced: Date; \n`;
 
+  // Generate TypeScript interface for each field
   fields.forEach((field) => {
     const fieldType = mapSalesforceTypeToTypeScript(field);
-    interfaceString += `  ${field.name}${field.nillable ? '?' : ''}: ${fieldType};\n`;
+    interfaceString += `  ${field.name}${
+      field.nillable ? "?" : ""
+    }: ${fieldType};\n`;
   });
 
-  interfaceString += '}';
+  interfaceString += "}";
 
   // Ensure the models directory exists
-  const modelsDir = path.join(__dirname, 'models');
+  const modelsDir = path.join(__dirname, "models");
   if (!fs.existsSync(modelsDir)) {
     fs.mkdirSync(modelsDir);
   }
 
+  // Write the generated interface to a file
   fs.writeFileSync(path.join(modelsDir, `${objectName}.ts`), interfaceString);
-  console.log(`${objectName} interface generated successfully.`);
+  logger.info(`${objectName} interface generated successfully.`);
 }
 
+// Map Salesforce field types to TypeScript types
 export function mapSalesforceTypeToTypeScript(field: any) {
   switch (field.type) {
-    case 'string':
-    case 'textarea':
-    case 'phone':
-    case 'picklist':
-    case 'id':
-    case 'url':
-    case 'email':
-    case 'reference':
-      return 'string';
-    case 'int':
-    case 'double':
-    case 'currency':
-    case 'percent':
-      return 'number';
-    case 'boolean':
-      return 'boolean';
-    case 'date':
-    case 'datetime':
-      return 'string'; // Use 'string' or 'Date' based on your preference
-    case 'base64':
-      return 'string';
+    case "string":
+    case "textarea":
+    case "phone":
+    case "picklist":
+    case "id":
+    case "url":
+    case "email":
+    case "reference":
+      return "string";
+    case "int":
+    case "double":
+    case "currency":
+    case "percent":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "date":
+    case "datetime":
+      return "string";
+    case "base64":
+      return "string";
     default:
-      return 'any';
+      return "any";
   }
 }
 
@@ -72,10 +73,11 @@ export function mapSalesforceTypeToTypeScript(field: any) {
 const objectName = process.argv[2];
 
 if (!objectName) {
-  console.error('Please provide a Salesforce object name as an argument.');
+  logger.error("Please provide a Salesforce object name as an argument.");
   process.exit(1);
 }
 
+// Generate the interface
 generateInterface(objectName).catch((error) => {
-  console.error(`Error generating interface: ${error}`);
+  logger.error(`Error generating interface: ${error}`);
 });

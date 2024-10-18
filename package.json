@@ -10,9 +10,10 @@
     "start": "node dist/index.js",
     "build": "npx tsc",
     "dev": "npx tsc && node dist/index.js",
-    "generate-interfaces": "npm run generate-interfaces-contact && npm run generate-interfaces-task",
+    "generate-interfaces": "npm run generate-interfaces-contact && npm run generate-interfaces-task && npm run generate-interfaces-account",
     "generate-interfaces-contact": "ts-node src/generateInterfaces.ts Contact",
-    "generate-interfaces-task": "ts-node src/generateInterfaces.ts Task"
+    "generate-interfaces-task": "ts-node src/generateInterfaces.ts Task",
+    "generate-interfaces-account": "ts-node src/generateInterfaces.ts Account"
   },
   "keywords": [],
   "author": "",
